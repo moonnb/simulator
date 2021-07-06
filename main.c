@@ -18,16 +18,26 @@ static void APIENTRY gl_message_callback(GLenum source, GLenum type, unsigned in
 #endif
 
 typedef unsigned AtomID;
-typedef unsigned CellID;
+typedef int MoleculeID;
 
 typedef struct {
 	unsigned char valence;
-	unsigned char nbonds; // current # of bonds
+	unsigned char n_bonds; // current # of bonds
 	vec2 pos;
 	vec2 vel;
-	CellID cell;
+	MoleculeID molecule; // -1 = no molecule
 } Atom;
 
+typedef struct {
+	AtomID a, b;
+} Bond;
+
+typedef struct {
+	bool exists;
+	unsigned n_atoms;
+	unsigned capacity;
+	AtomID *atoms;
+} Molecule;
 
 typedef struct {
 	int n_atoms;
@@ -40,6 +50,10 @@ typedef struct {
 	Atom *atoms;
 	Cell *grid;
 	float *heatmap;
+	Bond *bonds;
+	unsigned n_bonds, bonds_capacity;
+	Molecule *molecules;
+	MoleculeID n_molecules, molecules_capacity;
 } Universe;
 
 float randf() {
@@ -48,6 +62,85 @@ float randf() {
 
 Cell *cell_for_atom(Universe const *universe, Atom const *a) {
 	return &universe->grid[universe->width * (int)a->pos.y + (int)a->pos.x];
+}
+
+void add_to_molecule(Universe *u, MoleculeID m_id, AtomID a_id) {
+	Molecule *m = &u->molecules[m_id];
+	if (m->n_atoms >= m->capacity)
+		memory_reallocate(m->atoms, m->capacity = m->capacity * 2 + 2);
+	m->atoms[m->n_atoms++] = a_id;
+	u->atoms[a_id].molecule = m_id;
+	assert(m->n_atoms <= u->n_atoms);
+}
+
+void make_bond(Universe *u, AtomID id_a, AtomID id_b) {
+	assert(id_a != id_b);
+	Atom *a = &u->atoms[id_a], *b = &u->atoms[id_b];
+
+	++a->n_bonds;
+	++b->n_bonds;
+	if (a->molecule != -1 && a->molecule == b->molecule) {
+		// double/triple/quadruple bond
+		return;
+	}
+
+	Bond bond = {id_a, id_b};
+	if (u->n_bonds >= u->bonds_capacity)
+		memory_reallocate(u->bonds, u->bonds_capacity = u->bonds_capacity * 2 + 2);
+	u->bonds[u->n_bonds++] = bond;
+	bool a_in_molecule = a->molecule != -1;
+	bool b_in_molecule = b->molecule != -1;
+	Molecule *amol = NULL, *bmol = NULL;
+	if (a_in_molecule)
+		amol = &u->molecules[a->molecule];
+	if (b_in_molecule)
+		bmol = &u->molecules[b->molecule];
+	Molecule *result_mol = NULL;
+	if (a_in_molecule && b_in_molecule) {
+		// join molecules
+		for (unsigned i = 0; i < bmol->n_atoms; ++i) {
+			add_to_molecule(u, a->molecule, bmol->atoms[i]);
+		}
+		free(bmol->atoms);
+		bmol->exists = false;
+		bmol = NULL;
+		assert(a->molecule == b->molecule);
+		result_mol = amol;
+	} else if (a_in_molecule && !b_in_molecule) {
+		// add b to a's molecule
+		add_to_molecule(u, a->molecule, id_b);
+		result_mol = amol;
+	} else if (!a_in_molecule && b_in_molecule) {
+		// add a to b's molecule
+		add_to_molecule(u, b->molecule, id_a);
+		result_mol = bmol;
+	} else {
+		// make a new molecule with a and b
+		if (u->n_molecules >= u->molecules_capacity)
+			memory_reallocate(u->molecules, (size_t)(u->molecules_capacity = u->molecules_capacity * 2 + 2));
+		MoleculeID m_id = u->n_molecules++;
+		result_mol = &u->molecules[m_id];
+		memset(result_mol, 0, sizeof *result_mol);
+		result_mol->exists = true;
+		add_to_molecule(u, m_id, id_a);
+		add_to_molecule(u, m_id, id_b);
+	}
+
+	vec2 result_vel = u->atoms[result_mol->atoms[0]].vel;
+	for (unsigned i = 0; i < result_mol->n_atoms; ++i) {
+		u->atoms[result_mol->atoms[i]].vel = result_vel;
+	}
+
+	assert(a->molecule == result_mol - u->molecules);
+	assert(b->molecule == result_mol - u->molecules);
+	assert(a->vel.x == b->vel.x && a->vel.y == b->vel.y);
+}
+
+float bond_energy(int valence_a, int valence_b) {
+	(void)valence_a;
+	(void)valence_b;
+
+	return 0.4f;
 }
 
 int main() {
@@ -82,6 +175,7 @@ int main() {
 
 	GLProgram program_heat = gl_program_new("assets/heatv.glsl", "assets/heatf.glsl");
 	GLProgram program_atom = gl_program_new("assets/atomv.glsl", "assets/atomf.glsl");
+	GLProgram program_bond = gl_program_new("assets/bondv.glsl", "assets/bondf.glsl");
 
 	typedef struct {
 		vec2 pos;
@@ -106,12 +200,18 @@ int main() {
 		gl_vao_add_data(&vao_heat, vbo_heat, "v_pos", HeatVertex, pos);
 	}
 
+	typedef struct {
+		vec2 pos;
+	} BondVertex;
+
+	GLVBO vbo_bonds = gl_vbo_new(BondVertex);
+	GLVAO vao_bonds = gl_vao_new(program_bond);
 
 	SDL_GL_SetSwapInterval(1); // vsync
 	bool wireframe = false;
 
 	Universe *u = memory_allocate(Universe, 1);
-	u->width = 400;
+	u->width = 100;
 	u->height = 9*u->width/16;
 	size_t universe_area = (size_t)u->width * (size_t)u->height;
 	u->heatmap = memory_allocate(float, universe_area);
@@ -130,7 +230,7 @@ int main() {
 	gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-	u->n_atoms = 10000;
+	u->n_atoms = 1000;
 	u->grid = memory_allocate(Cell, universe_area);
 	u->atoms = memory_allocate(Atom, u->n_atoms);
 
@@ -138,8 +238,9 @@ int main() {
 
 	for (AtomID i = 0; i < u->n_atoms; ++i) {
 		Atom *atom = &u->atoms[i];
+		atom->molecule = -1;
 		atom->pos = mul(Vec2(randf(), randf()), universe_size);
-		atom->vel = vec2_polar(10, randf() * 6.28f);
+		atom->vel = vec2_polar(5, randf() * 6.28f);
 		atom->valence = rand() % 4 + 1;
 		Cell *cell = cell_for_atom(u, atom);
 		memory_reallocate(cell->atoms, (size_t)cell->n_atoms + 1);
@@ -281,18 +382,64 @@ int main() {
 		}
 
 		{
+			// bonding
+			int i = 0;
+			for (int y = 0; y < u->height; ++y) {
+				for (int x = 0; x < u->width; ++x, ++i) {
+					Cell *cell = &u->grid[i];
+					float *heat = &u->heatmap[i];
+					if (cell->n_atoms < 2) continue;
+					AtomID id_a = cell->atoms[0];
+					AtomID id_b = cell->atoms[1];
+					Atom *a = &u->atoms[id_a];
+					Atom *b = &u->atoms[id_b];
+					if (a->valence <= a->n_bonds || b->valence <= b->n_bonds) continue;
+					float energy = bond_energy(a->valence, b->valence);
+					if (energy > *heat) continue;
+					assert(cell_for_atom(u, a) == cell);
+					assert(cell_for_atom(u, b) == cell);
+					make_bond(u, id_a, id_b);
+					*heat -= energy;
+				}
+			}
+		}
+
+		vec2 cell_size = Vec2(2.0f / (float)u->width, 2.0f / (float)u->height);
+		#define world_to_render_space(wpos) sub(mul((wpos), cell_size), Vec2(1, 1))
+		{
 			// generate atom geometry
 			AtomVariableVertexData *data = atom_variable_data;
-			vec2 cell_size = Vec2(2.0f / (float)u->width, 2.0f / (float)u->height);
 			for (AtomID i = 0; i < u->n_atoms; ++i) {
 				Atom *atom = &u->atoms[i];
 				AtomVariableVertexData *v1 = data++;
 				AtomVariableVertexData *v2 = data++;
 				AtomVariableVertexData *v3 = data++;
 				AtomVariableVertexData *v4 = data++;
-				vec2 pos = sub(mul(atom->pos, cell_size), Vec2(1, 1));
+				vec2 pos = world_to_render_space(atom->pos);
 				v1->pos = v2->pos = v3->pos = v4->pos = pos;
 			}
+		}
+
+		{
+			// generate bond geometry
+			BondVertex *data = memory_allocate(BondVertex, 2 * u->n_bonds), *p = data;
+			for (unsigned i = 0; i < u->n_bonds; ++i) {
+				Bond *bond = &u->bonds[i];
+				Atom *a = &u->atoms[bond->a];
+				Atom *b = &u->atoms[bond->b];
+				vec2 a_pos = world_to_render_space(a->pos);
+				vec2 b_pos = world_to_render_space(b->pos);
+				if (sqdistance(a_pos, b_pos) > 0.5f)
+					continue; // bond stretches across screen
+				BondVertex *v1 = p++;
+				BondVertex *v2 = p++;
+				v1->pos = a_pos;
+				v2->pos = b_pos;
+			}
+			gl_vbo_set_stream_data(&vbo_bonds, data, (size_t)(p - data));
+			gl_vao_clear(&vao_bonds);
+			gl_vao_add_data(&vao_bonds, vbo_bonds, "v_pos", BondVertex, pos);
+			free(data);
 		}
 
 		gl_vbo_set_stream_data(&vbo_atom_variable, atom_variable_data, u->n_atoms * 4);
@@ -310,6 +457,9 @@ int main() {
 		gl_program_uniform(program_heat, "u_color_cold", Vec3(0.0f, 0.1f, 0.5f));
 		gl_program_uniform(program_heat, "u_color_hot", Vec3(1.0f, 0.3f, 0.3f));
 		gl_vao_render(vao_heat, &ibo_heat);
+
+		gl_program_use(program_bond);
+		gl_vao_render_lines(vao_bonds, NULL);
 
 		gl.Enable(GL_BLEND);
 		gl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

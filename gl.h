@@ -183,6 +183,9 @@ extern void gl_vao_add_data_with_offset(GLVAO *vao, GLVBO vbo, const char *attr_
 // pass NULL for ibo to just use indices 0, 1, 2, ... count-1
 // make sure you are using vao's program before calling this!
 extern void gl_vao_render(GLVAO vao, GLIBO const *ibo);
+extern void gl_vao_render_lines(GLVAO vao, GLIBO const *ibo);
+// reset count to 0, you will need to do this if the number of elements changes
+extern void gl_vao_clear(GLVAO *vao);
 extern void gl_vao_delete(GLVAO *vao);
 
 // call this when you're done with OpenGL

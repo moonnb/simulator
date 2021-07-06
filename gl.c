@@ -252,16 +252,27 @@ void gl_vao_add_data_with_offset(GLVAO *vao, GLVBO vbo, const char *attr_name,
 	}
 }
 
-void gl_vao_render(GLVAO vao, GLIBO const *ibo) {
+static void gl_vao_render_with_mode(GLVAO vao, GLIBO const *ibo, GLenum mode) {
 	gl_check_program_in_use(vao.program_id);
 	gl.BindVertexArray(vao.id);
 	if (ibo) {
 		gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo->id);
-		gl.DrawElements(GL_TRIANGLES, (GLsizei)ibo->count, GL_UNSIGNED_INT, NULL);
+		gl.DrawElements(mode, (GLsizei)ibo->count, GL_UNSIGNED_INT, NULL);
 	} else {
-		gl.DrawArrays(GL_TRIANGLES, 0, (GLsizei)vao.count);
+		gl.DrawArrays(mode, 0, (GLsizei)vao.count);
 	}
+}
 
+void gl_vao_render(GLVAO vao, GLIBO const *ibo) {
+	gl_vao_render_with_mode(vao, ibo, GL_TRIANGLES);
+}
+
+void gl_vao_render_lines(GLVAO vao, GLIBO const *ibo) {
+	gl_vao_render_with_mode(vao, ibo, GL_LINES);
+}
+
+void gl_vao_clear(GLVAO *vao) {
+	vao->count = 0;
 }
 
 void gl_vao_delete(GLVAO *vao) {
