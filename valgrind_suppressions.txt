@@ -1,0 +1,50 @@
+{
+	graphics driver
+	Memcheck:Leak
+	...
+	obj:/usr/lib/x86_64-linux-gnu/dri/radeonsi_dri.so
+	...
+}
+{
+	SDL
+	Memcheck:Leak
+	...
+	obj:/usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0.14.0
+	...
+}
+{
+	LLVM for some reason
+	Memcheck:Leak
+	...
+	obj:/usr/lib/x86_64-linux-gnu/libLLVM-11.so.1
+	...
+}
+{
+	DBUS
+	Memcheck:Leak
+	...
+	obj:/usr/lib/x86_64-linux-gnu/libdbus-1.so.3.19.13
+	...
+}
+{
+	X11
+	Memcheck:Leak
+	...
+	obj:/usr/lib/x86_64-linux-gnu/libX11.so.6.4.0
+	...
+}
+
+{
+	dl
+	Memcheck:Leak
+	...
+	fun:dlopen_doit
+	...
+}
+{
+	dl2
+	Memcheck:Leak
+	...
+	fun:dlerror_run
+	...
+}
